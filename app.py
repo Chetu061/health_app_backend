@@ -3,16 +3,25 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 import jwt
 import datetime
+import os
+import psycopg2
 
 app = Flask(__name__)
 
-conn = psycopg2.connect(
-    host="localhost",
-    database="health_db",
-    user="postgres",
-    password="123456",
-    port="5432"
-)
+# conn = psycopg2.connect(
+#     host="localhost",
+#     database="health_db",
+#     user="postgres",
+#     password="123456",
+#     port="5432"
+# )
+
+db_url = os.environ.get("DATABASE_URL")
+
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+conn = psycopg2.connect(db_url)
 
 @app.route("/api/register", methods=["POST"])
 def register():
