@@ -10,4 +10,5 @@ MarkupSafe==3.0.3
 packaging==26.2
 psycopg2-binary==2.9.12
 PyJWT==2.12.1
+google-genai==1.56.0
 Werkzeug==3.1.8
