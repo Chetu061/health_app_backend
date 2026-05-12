@@ -81,6 +81,24 @@ def get_db_connection():
     )
 
 
+def ensure_profile_columns(conn):
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS role VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS age INTEGER,
+            ADD COLUMN IF NOT EXISTS height NUMERIC,
+            ADD COLUMN IF NOT EXISTS weight NUMERIC,
+            ADD COLUMN IF NOT EXISTS goal VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+        """)
+        conn.commit()
+    finally:
+        cursor.close()
+
+
 # =========================
 # REGISTER API
 # =========================
@@ -189,6 +207,7 @@ def login():
 @token_required
 def update_profile():
     conn = get_db_connection()
+    ensure_profile_columns(conn)
     cursor = conn.cursor()
 
     try:
