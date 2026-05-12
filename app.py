@@ -224,15 +224,29 @@ def update_profile():
             UPDATE users
             SET role=%s, age=%s, height=%s, weight=%s, goal=%s, updated_at=NOW()
             WHERE id=%s
+            RETURNING id, role, age, height, weight, goal, updated_at
         """, (role, age, height, weight, goal, user_id))
 
-        if cursor.rowcount == 0:
+        updated_user = cursor.fetchone()
+
+        if not updated_user:
             conn.rollback()
             return jsonify({"error": "User not found"}), 404
 
         conn.commit()
 
-        return jsonify({"message": "Profile updated successfully"})
+        return jsonify({
+            "message": "Profile updated successfully",
+            "data": {
+                "id": updated_user[0],
+                "role": updated_user[1],
+                "age": updated_user[2],
+                "height": float(updated_user[3]) if updated_user[3] is not None else None,
+                "weight": float(updated_user[4]) if updated_user[4] is not None else None,
+                "goal": updated_user[5],
+                "updated_at": updated_user[6].isoformat() if updated_user[6] else None
+            }
+        })
 
     except Exception as e:
         conn.rollback()
