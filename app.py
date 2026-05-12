@@ -63,7 +63,7 @@ def token_required(f):
 
 # 🔥 Database connection function (IMPORTANT FOR RENDER)
 def get_db_connection():
-    db_url = os.environ.get("DATABASE_URL")
+    db_url = os.environ.get("DATABASE_URL") or get_env_value("DATABASE_URL")
 
     if db_url:
         if db_url.startswith("postgres://"):
