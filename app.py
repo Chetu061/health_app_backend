@@ -178,7 +178,7 @@ def login():
             {
                 "user_id": user[0],
                 "email": user[2],
-                "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+                "exp": datetime.utcnow() + timedelta(hours=1)
             },
             SECRET_KEY,
             algorithm="HS256"
