@@ -93,6 +93,7 @@ def ensure_profile_columns(conn):
             ADD COLUMN IF NOT EXISTS height NUMERIC,
             ADD COLUMN IF NOT EXISTS weight NUMERIC,
             ADD COLUMN IF NOT EXISTS goal VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS activity_level VARCHAR(20),
             ADD COLUMN IF NOT EXISTS profile_photo VARCHAR(500),
             ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
         """)
@@ -220,14 +221,14 @@ def update_profile():
         height = data.get("height")
         weight = data.get("weight")
         goal = data.get("goal")
-
+        activity_level = data.get("activity_level")
 
         cursor.execute("""
             UPDATE users
-            SET role=%s, age=%s, height=%s, weight=%s, goal=%s, updated_at=NOW()
+            SET role=%s, age=%s, height=%s, weight=%s, goal=%s, activity_level=%s, updated_at=NOW()
             WHERE id=%s
-            RETURNING id, role, age, height, weight, goal, updated_at
-        """, (role, age, height, weight, goal, user_id))
+            RETURNING id, role, age, height, weight, goal, activity_level, updated_at
+        """, (role, age, height, weight, goal, activity_level, user_id))
 
         updated_user = cursor.fetchone()
 
@@ -246,7 +247,8 @@ def update_profile():
                 "height": float(updated_user[3]) if updated_user[3] is not None else None,
                 "weight": float(updated_user[4]) if updated_user[4] is not None else None,
                 "goal": updated_user[5],
-                "updated_at": updated_user[6].isoformat() if updated_user[6] else None
+                "activity_level": updated_user[6],
+                "updated_at": updated_user[7].isoformat() if updated_user[7] else None
             }
         })
 
@@ -652,7 +654,7 @@ def get_profile():
         user_id = request.user_id
 
         cursor.execute("""
-            SELECT role, age, height, weight, goal, profile_photo
+            SELECT role, age, height, weight, goal, activity_level, profile_photo
             FROM users
             WHERE id = %s
         """, (user_id,))
@@ -662,7 +664,7 @@ def get_profile():
         if not user:
             return jsonify({"error": "User not found"}), 404
 
-        role, age, height, weight, goal, profile_photo = user
+        role, age, height, weight, goal, activity_level, profile_photo = user
 
         return jsonify({
             "role": role,
@@ -670,6 +672,7 @@ def get_profile():
             "height": float(height) if height is not None else None,
             "weight": float(weight) if weight is not None else None,
             "goal": goal,
+            "activity_level": activity_level,
             "profile_photo": request.host_url + "uploads/" + profile_photo.replace("\\", "/") if profile_photo else None
         })
 
