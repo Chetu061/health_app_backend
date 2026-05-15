@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 import jwt
@@ -750,6 +750,10 @@ def upload_photo():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/uploads/<filename>')
+def serve_upload(filename):
+    return send_from_directory('uploads', filename)
 
 # =========================
 # GET STREAK  API
