@@ -2,11 +2,12 @@ from flask import Flask, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 import psycopg2
 import jwt
-import datetime
 import os
 from functools import wraps
 from google import genai
-
+from werkzeug.utils import secure_filename
+import time
+from datetime import date,datetime,timedelta
 
 app = Flask(__name__)
 
@@ -92,6 +93,7 @@ def ensure_profile_columns(conn):
             ADD COLUMN IF NOT EXISTS height NUMERIC,
             ADD COLUMN IF NOT EXISTS weight NUMERIC,
             ADD COLUMN IF NOT EXISTS goal VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS profile_photo VARCHAR(500),
             ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
         """)
         conn.commit()
@@ -502,6 +504,45 @@ def daily_mission():
 # =========================
 # MEAL PLAN AI API
 # =========================
+# @app.route("/api/meal-plan", methods=["POST"])
+# @token_required
+# def meal_plan():
+#     try:
+#         data = request.get_json()
+#         user_input = data.get("message")
+
+#         if not user_input:
+#             return jsonify({"error": "message is required"}), 400
+
+#         api_key = get_gemini_api_key()
+#         if not api_key:
+#             return jsonify({"error": "GEMINI_API_KEY is required"}), 500
+
+#         client = genai.Client(api_key=api_key)
+#         prompt = (
+#             (
+#                 "You are a professional health and nutrition assistant. "
+#                 "Give simple, clear, practical answers. Focus on Indian diet when possible. "
+#                 "Avoid medical diagnosis. Suggest healthy meals, workouts, and habits. "
+#                 "Keep the response short and structured. If the user asks diet, give "
+#                 "breakfast/lunch/dinner plan. If user asks fitness, give daily routine."
+#             )
+#             + "\n\nUser message:\n"
+#             + user_input
+#         )
+
+#         response = client.models.generate_content(
+#             model=GEMINI_MODEL,
+#             contents=prompt
+#         )
+
+#         return jsonify({"reply": response.text})
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+def shorten(text, max_words=5):
+    return " ".join(text.split()[:max_words])
 @app.route("/api/meal-plan", methods=["POST"])
 @token_required
 def meal_plan():
@@ -517,16 +558,35 @@ def meal_plan():
             return jsonify({"error": "GEMINI_API_KEY is required"}), 500
 
         client = genai.Client(api_key=api_key)
+
+        # 🔥 SHORT + STRUCTURED PROMPT
         prompt = (
-            (
-                "You are a professional health and nutrition assistant. "
-                "Give simple, clear, practical answers. Focus on Indian diet when possible. "
-                "Avoid medical diagnosis. Suggest healthy meals, workouts, and habits. "
-                "Keep the response short and structured. If the user asks diet, give "
-                "breakfast/lunch/dinner plan. If user asks fitness, give daily routine."
-            )
-            + "\n\nUser message:\n"
-            + user_input
+            "You are a health assistant.\n"
+            "Respond ONLY in JSON.\n"
+            "Keep answers VERY SHORT (max 3-5 words).\n"
+            "No explanation.\n\n"
+
+            "{\n"
+            '  "meal_plan": [\n'
+            '    {"meal": "Breakfast", "food": ""},\n'
+            '    {"meal": "Lunch", "food": ""},\n'
+            '    {"meal": "Dinner", "food": ""}\n'
+            "  ],\n"
+            '  "workout": [\n'
+            '    {"type": "", "duration": ""}\n'
+            "  ],\n"
+            '  "timing": {\n'
+            '    "breakfast": "",\n'
+            '    "lunch": "",\n'
+            '    "dinner": "",\n'
+            '    "sleep": ""\n'
+            "  }\n"
+            "}\n\n"
+
+            "Example:\n"
+            '{"meal_plan":[{"meal":"Breakfast","food":"Poha"},{"meal":"Lunch","food":"Dal Rice"},{"meal":"Dinner","food":"Khichdi"}],"workout":[{"type":"Walk","duration":"20 min"}],"timing":{"breakfast":"8 AM","lunch":"1 PM","dinner":"8 PM","sleep":"10 PM"}}\n\n'
+
+            "User:\n" + user_input
         )
 
         response = client.models.generate_content(
@@ -534,10 +594,367 @@ def meal_plan():
             contents=prompt
         )
 
-        return jsonify({"reply": response.text})
+        raw_text = response.text.strip()
+
+        # 🧹 Clean markdown if exists
+        if raw_text.startswith("```"):
+            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+
+        try:
+            ai_data = json.loads(raw_text)
+
+            # 🔥 SHORTEN TEXT (extra safety)
+            for meal in ai_data.get("meal_plan", []):
+                meal["food"] = shorten(meal.get("food", ""))
+
+            for w in ai_data.get("workout", []):
+                w["type"] = shorten(w.get("type", ""))
+                w["duration"] = shorten(w.get("duration", ""))
+
+            for key in ai_data.get("timing", {}):
+                ai_data["timing"][key] = shorten(ai_data["timing"][key])
+
+            return jsonify(ai_data)
+
+        except Exception:
+            # fallback if AI fails
+            return jsonify({
+                "meal_plan": [
+                    {"meal": "Breakfast", "food": "Poha"},
+                    {"meal": "Lunch", "food": "Dal Rice"},
+                    {"meal": "Dinner", "food": "Khichdi"}
+                ],
+                "workout": [
+                    {"type": "Walk", "duration": "20 min"}
+                ],
+                "timing": {
+                    "breakfast": "8 AM",
+                    "lunch": "1 PM",
+                    "dinner": "8 PM",
+                    "sleep": "10 PM"
+                }
+            })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# =========================
+# GET PROFILE API
+# =========================
+@app.route("/api/profile", methods=["GET"])
+@token_required
+def get_profile():
+    conn = get_db_connection()
+    ensure_profile_columns(conn)
+    cursor = conn.cursor()
+
+    try:
+        user_id = request.user_id
+
+        cursor.execute("""
+            SELECT role, age, height, weight, goal, profile_photo
+            FROM users
+            WHERE id = %s
+        """, (user_id,))
+
+        user = cursor.fetchone()
+
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        role, age, height, weight, goal, profile_photo = user
+
+        return jsonify({
+            "role": role,
+            "age": age,
+            "height": float(height) if height is not None else None,
+            "weight": float(weight) if weight is not None else None,
+            "goal": goal,
+            "profile_photo": request.host_url + "uploads/" + profile_photo.replace("\\", "/") if profile_photo else None
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# =========================
+# profile photo API
+# =========================
+@app.route('/api/upload-photo', methods=['POST'])
+@token_required
+def upload_photo():
+    try:
+        conn = get_db_connection()
+        ensure_profile_columns(conn)
+        conn.close()
+
+        file = request.files.get('photo')
+
+        if not file:
+            return jsonify({"error": "No file uploaded"}), 400
+
+        # ✅ validate file type
+        if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            return jsonify({"error": "Invalid file type"}), 400
+
+        filename = secure_filename(file.filename)
+
+        # ✅ unique filename
+        import time
+        filename = str(int(time.time())) + "_" + filename
+
+        upload_folder = "uploads"
+
+        # ✅ create folder if not exists
+        if not os.path.exists(upload_folder):
+            os.makedirs(upload_folder)
+
+        path = os.path.join(upload_folder, filename)
+        file.save(path)
+
+        user_id = request.user_id
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # ✅ check user exists
+        cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+
+        if not user:
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "User not found"}), 404
+
+        # 🔴 FIX: store ONLY filename (not full path)
+        cursor.execute(
+            "UPDATE users SET profile_photo = %s WHERE id = %s",
+            (filename, user_id)
+        )
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # 🔴 FIX: dynamic URL (works everywhere)
+        photo_url = request.host_url + "uploads/" + filename
+
+        return jsonify({
+            "message": "Photo uploaded",
+            "photo_url": photo_url
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# =========================
+# GET STREAK  API
+# =========================
+def update_streak(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT streak, last_active FROM users WHERE id = %s",
+        (user_id,)
+    )
+    result = cursor.fetchone()
+
+    if not result:
+        cursor.close()
+        conn.close()
+        return 0
+
+    streak, last_active = result
+    today = date.today()
+
+    if last_active is None:
+        streak = 1
+
+    elif last_active == today:
+        cursor.close()
+        conn.close()
+        return streak
+
+    elif last_active == today - timedelta(days=1):
+        streak += 1
+
+    else:
+        streak = 1
+
+    cursor.execute(
+        "UPDATE users SET streak = %s, last_active = %s WHERE id = %s",
+        (streak, today, user_id)
+    )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return streak
+
+@app.route('/api/update-streak', methods=['POST'])
+@token_required
+def update_streak_api():
+    try:
+        user_id = request.user_id
+
+        streak = update_streak(user_id)
+
+        return jsonify({
+            "message": "Streak updated",
+            "streak": streak
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# =========================
+# GET habit check  API
+# =========================
+@app.route('/api/habit-check', methods=['POST'])
+@token_required
+def habit_check():
+    try:
+        data = request.get_json()
+        habit_name = data.get("habit_name")
+        status = data.get("status", True)
+
+        if not habit_name:
+            return jsonify({"error": "habit_name required"}), 400
+
+        user_id = request.user_id
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # ✅ insert habit
+        cursor.execute("""
+            INSERT INTO habits (user_id, habit_name, status)
+            VALUES (%s, %s, %s)
+        """, (user_id, habit_name, status))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # 🔥 update streak
+        streak = update_streak(user_id)
+
+        return jsonify({
+            "message": "Habit recorded",
+            "streak": streak
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        
+# =========================
+# Habbit History API
+# =========================
+@app.route('/api/habit-history', methods=['GET'])
+@token_required
+def habit_history():
+    try:
+        user_id = request.user_id
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT habit_name, status, created_at
+            FROM habits
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """, (user_id,))
+
+        rows = cursor.fetchall()
+
+        result = []
+        for r in rows:
+            result.append({
+                "habit": r[0],
+                "status": r[1],
+                "date": r[2]
+            })
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({"history": result})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+# =========================
+# water intake  API
+# =========================
+@app.route('/api/water-intake', methods=['POST'])
+@token_required
+def water_intake():
+    try:
+        user_id = request.user_id
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE users 
+            SET last_water_time = NOW()
+            WHERE id = %s
+        """, (user_id,))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return jsonify({"message": "Water intake recorded"})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# =========================
+# CHECK ALERTS API
+# =========================
+@app.route('/api/check-alerts', methods=['GET'])
+@token_required
+def check_alerts():
+    try:
+        user_id = request.user_id
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT last_water_time FROM users WHERE id = %s
+        """, (user_id,))
+
+        row = cursor.fetchone()
+        alerts = []
+
+        if row and row[0]:
+            last_time = row[0]
+
+            if datetime.now() - last_time > timedelta(hours=4):
+                alerts.append("You haven’t drunk water in 4 hours")
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({"alerts": alerts})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# =========================
+# GET Logout API
+# =========================
+@app.route('/api/logout', methods=['POST'])
+@token_required  
+def logout():
+    user_id = request.user_id 
+    return jsonify({"message": "Logout successful"})
 
 
 # =========================
